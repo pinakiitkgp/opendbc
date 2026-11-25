@@ -28,6 +28,7 @@ def clarity(fw=PTM, angle=False, **live):
   car_fw = [structs.CarParams.CarFw(ecu="eps", fwVersion=fw, address=0x18DA30F1)]
   fp = gen_empty_fingerprint()
   cp = CarInterface.get_params(CAR.HONDA_CLARITY, fp, car_fw, False, False, False, interface_config=config)
+  cp.carFw = car_fw
   sp = CarInterface.get_params_sp(cp, CAR.HONDA_CLARITY, fp, car_fw, False, False, False)
   setup_interfaces(CarInterface, cp, sp, config)
   ci = CarInterface(cp, sp, config)
@@ -365,7 +366,7 @@ def test_v1_until_the_first_layout4_frame():
 
 def test_unknown_v2_build_never_steers():
   ci = clarity(PTM2, angle=True)
-  FeedV2(ci).run_v4(8, build=0x0C)
+  FeedV2(ci).run_v4(8, build=0x0E)
   assert ci.CS.eps_cal_status.fault == "unknown_build"
   assert e4(ci, True, 5.0)[1][0:3] == bytes(3)
 

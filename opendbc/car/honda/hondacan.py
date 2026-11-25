@@ -142,7 +142,7 @@ def create_acc_commands(packer, CAN, enabled, active, accel, gas, stopping_count
   return commands
 
 
-def create_steering_control(packer, CAN, apply_torque, lkas_active, tja_control, eps_mode=0, angle_payload=0):
+def create_steering_control(packer, CAN, apply_torque, lkas_active, tja_control, eps_mode=0, angle_payload=0, arm_bits=0, angle_arm=None):
   values = {
     "STEER_TORQUE": apply_torque if lkas_active else 0,
     "STEER_TORQUE_REQUEST": lkas_active,
@@ -154,8 +154,17 @@ def create_steering_control(packer, CAN, apply_torque, lkas_active, tja_control,
   # (bits 3:1) + control type (bit 0); byte 2 bit 5 marks an angle payload in bytes 0-1. Stock firmware never reads them.
   if eps_mode:
     values["SET_ME_X00_2"] = eps_mode
-  if angle_payload and lkas_active:
-    values["SET_ME_X00"] = angle_payload
+  if angle_arm is not None:
+    values["STEER_CONTROL_ARM"] = angle_arm
+  if lkas_active and (angle_payload or arm_bits):
+    signals = packer.dbc.name_to_msg["STEERING_CONTROL"].sigs
+    if "ANGLE_PAYLOAD" in signals:
+      values["ANGLE_PAYLOAD"] = bool(angle_payload)
+      if arm_bits:
+        values["STEER_CONTROL_ARM"] = (arm_bits >> 2) & 3
+        values["STEER_CONTROL_ARM_B6"] = (arm_bits >> 6) & 1
+    else:
+      values["SET_ME_X00"] = angle_payload | arm_bits
 
   return packer.make_can_msg("STEERING_CONTROL", CAN.lkas, values)
 

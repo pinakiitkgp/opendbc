@@ -201,6 +201,9 @@ bool safety_rx_hook(const CANPacket_t *msg) {
   if (valid && whitelisted) {
     current_hooks->rx(msg);
   }
+  if (!whitelisted && (current_hooks->optional_rx != NULL)) {
+    current_hooks->optional_rx(msg);
+  }
 
   // Handles gas, brake, and regen paddle
   generic_rx_checks();

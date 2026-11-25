@@ -183,6 +183,7 @@ struct CarState {
 
   # steering wheel
   steeringAngleDeg @7 :Float32;
+  steeringAngleLinear @62 :Bool; # steeringAngleDeg is in rack-linear coordinates
   steeringAngleOffsetDeg @37 :Float32; # Offset between sensors in case there multiple
   steeringRateDeg @15 :Float32;    # optional
   steeringTorque @8 :Float32;      # Native CAN units, only needed on cars where it's used for control

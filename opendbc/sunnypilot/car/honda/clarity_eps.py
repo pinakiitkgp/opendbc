@@ -32,12 +32,12 @@ plan (Hyundai/Kia style, ported from the night-star7 personal branch e6676c283f:
 is carried out while lateral is active, so a target that follows the wheel and walks back after the release misleads
 it); at the release only authority changes, back over POST_PRESS_AUTH_S.
 """
-from enum import IntEnum
-
 import numpy as np
 
 from opendbc.car import DT_CTRL, structs
 from opendbc.car.carlog import carlog
+from opendbc.car.honda.angle_profiles import ANGLE_PTM_FIRMWARE, angle_profile, own_geometry, safety_param_bits
+from opendbc.car.honda.meps.protocol import V2_BUILDS, V2_MODE_ANGLE, byte3_v2, decode_layout4, is_layout4
 from opendbc.car.honda.values import CAR
 from opendbc.sunnypilot.car.honda.values_ext import HondaFlagsSP, HondaSafetyFlagsSP
 
@@ -103,17 +103,29 @@ def is_angle_ptm_id(fw_version: bytes) -> bool:
   return len(v) >= 10 and v[5:6] == ANGLE_PTM_SEPARATOR and v[9:10] == ANGLE_PTM_SEPARATOR
 
 
+def angle_ptm_available(CP, CP_SP) -> bool:
+  required = HondaFlagsSP.EPS_MODIFIED | HondaFlagsSP.EPS_ANGLE_PTM
+  platform = getattr(CP, "carFingerprint", None)
+  if getattr(CP, "brand", "") != "honda" or platform not in ANGLE_PTM_FIRMWARE:
+    return False
+  if getattr(CP_SP, "flags", 0) & required != required:
+    return False
+  versions = {bytes(fw.fwVersion).rstrip(b"\0") for fw in getattr(CP, "carFw", ()) if fw.ecu == "eps"}
+  # Auxiliary EPS data identifiers are not the Honda software part number.
+  part_numbers = {version for version in versions if version.startswith(b"39990")}
+  return len(part_numbers) == 1 and part_numbers <= ANGLE_PTM_FIRMWARE[platform]
+
+
 def apply_angle_mode(CP, CP_SP, requested: bool) -> None:
-  """Startup choice (HondaCarConfig.clarity_angle_mode). Only a Clarity whose EPS reports the angle PTM ID
-  (39990+TRW+A020, builds 0x05 on) can select angle mode; torque PTM ("," IDs) and every other car are untouched.
-  At runtime the 0x6A4 interlock still gates the payload on the reported build and mode."""
-  if requested and CP.carFingerprint == CAR.HONDA_CLARITY and CP_SP.flags & HondaFlagsSP.EPS_MODIFIED and \
-     CP_SP.flags & HondaFlagsSP.EPS_ANGLE_PTM:
+  if requested and angle_ptm_available(CP, CP_SP):
     CP_SP.flags |= HondaFlagsSP.CLARITY_ANGLE_MODE.value
     CP.steerControlType = structs.CarParams.SteerControlType.angle
-    # panda's angle rule on 0xE4 (honda.h): request/payload/target only while lateral is allowed, |target| within the
-    # 3.6 m/s^2 angle, steps within the 3.6 m/s^3 jerk step, the first target within one step of the wheel
     CP_SP.safetyParam |= HondaSafetyFlagsSP.CLARITY_ANGLE
+    profile = angle_profile(CP)
+    if profile is not None:
+      CP_SP.safetyParam |= safety_param_bits(profile)
+      CP.steerRatio = own_geometry(CP).steer_ratio
+      # Retain nrdr's platform speed floor. The variant's steering ECU still owns its hardware lockouts.
 
 
 def angle_mode(CP_SP) -> bool:
@@ -237,8 +249,6 @@ KNOWN_BUILDS = {
 ANGLE_BUILDS = {0x04, 0x05, 0x09, 0x0A}   # builds with the in-EPS angle loop (0x6A4 layout v3)
 
 # --- protocol v2 (build 0x0B on), rwd-xray lab/audit_fable_20261121/v2/PROTOCOL_V2.md ---
-V2_BUILDS = {0x0B}           # build IDs that speak protocol v2 (0x6A4 layout 4); an unknown layout-4 build never steers
-V2_MODE_ANGLE = 1
 # carState updates (100 Hz) an angle request may go without the EPS reporting STEERING: 100 ms (owner's 0x09 drives: the
 # loop reported running 14 ms after the request rose, median, 34 ms at most)
 LOOP_START_FRAMES = 10
@@ -247,44 +257,11 @@ LOOP_START_FRAMES = 10
 LOOP_RETRY_FRAMES = 100
 
 
-class Reason(IntEnum):
-  STEERING = 0
-  NO_REQUEST = 1
-  MODE_SWITCH_PENDING = 2
-  PROTOCOL = 3
-  JUMP = 4
-  STALE = 5
-  ANGLE_INVALID = 6
-  AUTHORITY_ZERO = 7
-  STOCK_LKAS_NOT_ENGAGED = 8
-
-
 def byte3_v1(requested_mode: int, cut: int) -> int:
   """v1: the requested mode (3 or 4), control bit set, CUT (0 = full authority)."""
   return ((cut & 0xF) << 4) | ((requested_mode & 0x7) << 1) | 1
 
 
-def byte3_v2(cut: int) -> int:
-  """v2: MODE 1 (angle), AUTH = 15 - CUT (AUTH 15 = full authority; the polarity is the opposite of v1's CUT)."""
-  return ((15 - (cut & 0xF)) << 4) | V2_MODE_ANGLE
-
-
-def is_layout4(vl) -> bool:
-  """Layout 4 sets byte 0 bit 7 (layout 3's requested mode is at most 4, so that bit is never set there)."""
-  return (int(vl["REQUESTED_MODE"]) & 0x8) != 0
-
-
-def decode_layout4(vl) -> dict:
-  """Layout-4 fields from the layout-3 DBC signals of the same bytes (no DBC change)."""
-  hi = int(vl["REQUESTED_MODE"])                                   # byte 0 bits 7:4 = layout, FAULT, STEERING, CLAMP
-  b0_low = (int(vl["ANGLE_LOOP_RUNNING"]) << 3) | int(vl["ACTIVE_MODE"])   # byte 0 bits 3:0
-  reason = (int(vl["ANGLE_TARGET_HELD"]) << 3) | (int(vl["ANGLE_FAULT_WHY"]) << 1) | int(vl["ANGLE_FAULT"])
-  try:
-    reason_name = Reason(reason).name
-  except ValueError:
-    reason_name = f"REASON_{reason}"
-  return dict(fault=bool(hi & 0x4), steering=bool(hi & 0x2), clamp=bool(hi & 0x1), lkas=(b0_low >> 2) & 0x3,
-              mode=b0_low & 0x3, build=int(vl["BUILD_ID"]), reason=reason, reason_name=reason_name)
 STATUS_TIMEOUT_FRAMES = 50   # carState updates (100 Hz): 0.5 s, 25 periods of the 50 Hz frame
 MSG = "EPS_CAL_STATUS"
 
@@ -313,7 +290,8 @@ class EpsCalStatus:
     self.angle_fault_why = 0    # 1 jump, 2 stale, 3 angle invalid
     self.angle_ref_deg = 0.0
     self.angle_out = 0
-    self.protocol = 1           # 2 once the EPS reports 0x6A4 layout 4
+    self.requires_v2 = self.angle and CP.carFingerprint != CAR.HONDA_CLARITY
+    self.protocol = 2 if self.requires_v2 else 1
     self.reason = ""            # v2: the EPS's REASON for not steering (layout 4 byte 2)
     self.clamp = False          # v2: the EPS lateral-accel clamp is acting
     self.request_sent = False   # v2 interlock: the angle request bit CarController sent last frame (note_angle_request)
@@ -343,6 +321,8 @@ class EpsCalStatus:
       return "lost"
     if is_layout4(vl):
       return self._check_v2(vl)
+    if self.requires_v2 or self.protocol == 2:
+      return "unsupported_build"
     self.protocol = 1
     self.active_mode, self.build_id = int(vl["ACTIVE_MODE"]), int(vl["BUILD_ID"])
     caps = KNOWN_BUILDS.get(self.build_id)
@@ -373,6 +353,8 @@ class EpsCalStatus:
       return "unknown_build"
     if not self.angle:
       return "mode_not_built"                 # v2 has no torque PTM mode
+    if self.requires_v2 and self.build_id == 0x0B:
+      return "linear_build_required"
     if self.active_mode != V2_MODE_ANGLE:
       return "inactive_mode"
     self.loop_running = s["steering"]

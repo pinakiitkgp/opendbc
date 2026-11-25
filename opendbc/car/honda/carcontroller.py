@@ -8,6 +8,9 @@ from opendbc.car.common.conversions import Conversions as CV
 from opendbc.can import CANPacker
 from opendbc.car import ACCELERATION_DUE_TO_GRAVITY, Bus, DT_CTRL, rate_limit, make_tester_present_msg, structs
 from opendbc.car.honda import hondacan
+from opendbc.car.honda.angle_profiles import angle_profile
+from opendbc.car.honda.meps import angle_sender as angle_v2
+from opendbc.car.honda.meps.protocol import LINEAR_ANGLE_BUILDS
 from opendbc.car.honda.bosch_longitudinal import BoschLongitudinal, bosch_a_harness, qualified as bosch_long_qualified, star7_params
 from opendbc.car.honda.values import CAR, HONDA_BOSCH, CarControllerParams, CruiseButtons, CruiseSettings, HondaFlags
 from opendbc.car.interfaces import CarControllerBase
@@ -244,6 +247,9 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     self.eps_mode = clarity_eps.requested_eps_mode(CP, CP_SP) << 1        # 0x02 on a modified-EPS Clarity, else 0
     self.angle_sender = clarity_eps.AngleModeSender() if clarity_eps.angle_mode(CP_SP) else None
     self.angle_authority = clarity_eps.AuthorityRamp()
+    self.angle_sender_v2 = angle_v2.AngleModeSender(angle_profile(CP)) if self.angle_sender is not None else None
+    self.angle_authority_v2 = angle_v2.AuthorityRamp()
+    self.angle_arm_supported = self.angle_sender is not None and angle_v2.stock_arm_bits_supported(CP)
     if self.angle_sender is not None:
       self.eps_mode = clarity_eps.BYTE3_ANGLE
     self.mvl_longitudinal = self.nrdr.mvl_longitudinal
@@ -784,8 +790,31 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
         can_sends.append((addr, dat, self.CAN.camera))
 
     # Send steering command.
-    angle_payload = 0
-    if self.angle_sender is not None:
+    angle_payload = arm_bits = 0
+    angle_arm = None
+    use_rack_linear = self.angle_sender_v2 is not None and (CS.eps_cal_status.requires_v2 or
+                      CS.eps_cal_status.build_id in LINEAR_ANGLE_BUILDS or CS.linear_angle.latched)
+    if use_rack_linear:
+      status = CS.eps_cal_status
+      sender = self.angle_sender_v2
+      ready = status.protocol == 2 and status.angle_ready and CS.linear_angle.steer_ok
+      holding = ready and status.authority_ready and self.angle_arm_supported
+      yielding = CS.out.steeringPressed
+      active_hold = holding and CC.latActive
+      cut = self.angle_authority_v2.update(active_hold, yielding, live.override_fade_up_s)
+      self.eps_mode = status.byte3(cut if active_hold else 0)
+      if "STEER_CONTROL_ARM" in self.packer.dbc.name_to_msg["STEERING_CONTROL"].sigs:
+        angle_arm = 2
+      arm_bits = angle_v2.stock_arm_bits(holding, yielding)
+      sender.linear = CS.linear_angle.latched or sender.profile is not None
+      raw, lkas_active, angle_payload = sender.update(
+        CC.latActive and (holding or not yielding), actuators.steeringAngleDeg, CS.out.steeringAngleDeg,
+        CS.out.vEgo, ready, CS.out.steeringRateDeg, angle_v2.HOLD_LIMITS_FADE_S if holding else live.override_fade_up_s,
+        live.angle_rate_limit_deg_s,
+      )
+      status.note_angle_request(lkas_active)
+      apply_torque = raw
+    elif self.angle_sender is not None:
       # Angle mode replaces the torque: bytes 0-1 carry the target only while 0x6A4 reports the requested angle mode on
       # an angle build. Builds 0x04/0x05: no request during a driver press, whatever the override settings (a request
       # held through a press makes the stiff angle loop fight the driver). Authority builds (0x09, 0x0A, 0x0B): the request
@@ -805,7 +834,8 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
       CS.eps_cal_status.note_angle_request(lkas_active)
       apply_torque = raw
     can_sends.append(hondacan.create_steering_control(self.packer, self.CAN, apply_torque, lkas_active, self.tja_control,
-                                                      eps_mode=self.eps_mode, angle_payload=angle_payload))
+                                                      eps_mode=self.eps_mode, angle_payload=angle_payload,
+                                                      arm_bits=arm_bits, angle_arm=angle_arm))
 
     if self.mvl_longitudinal and not self.civic_pcm:
       pcm_speed, pcm_accel = mvl_longitudinal.commands(
@@ -1607,7 +1637,8 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     if self.angle_sender is not None:
       new_actuators.torque = 0.0
       new_actuators.torqueOutputCan = 0.0
-      new_actuators.steeringAngleDeg = float(self.angle_sender.apply_angle)   # controlsd's angle saturation check
+      applied_angle = self.angle_sender_v2.out_angle if use_rack_linear else self.angle_sender.apply_angle
+      new_actuators.steeringAngleDeg = float(applied_angle)   # controlsd's angle saturation check
 
     if self.mvl_longitudinal:
       mvl_longitudinal.persist(self, self.nrdr.config.provider)

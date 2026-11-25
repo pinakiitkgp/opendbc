@@ -171,6 +171,8 @@ FW_VERSIONS = {
       b'39990-TBG-A030\x00\x00',
       b'39990-TEA-T020\x00\x00',
       b'39990-TEG-A010\x00\x00',
+      b'39990+TBA+A030\x00\x00',  # AnglePTM firmware
+      b'39990+TEG+A010\x00\x00',  # AnglePTM firmware
     ],
     (Ecu.srs, 0x18da53f1, None): [
       b'77959-TBA-A030\x00\x00',
@@ -250,6 +252,9 @@ FW_VERSIONS = {
       b'39990-TGH-J530\x00\x00',
       b'39990-TGL-E130\x00\x00',
       b'39990-TGN-E120\x00\x00',
+      b'39990+TBA+C020\x00\x00',  # AnglePTM firmware
+      b'39990+TBA+C120\x00\x00',  # AnglePTM firmware
+      b'39990+TGG+A120\x00\x00',  # AnglePTM firmware
     ],
     (Ecu.srs, 0x18da53f1, None): [
       b'77959-TBA-A060\x00\x00',
@@ -388,6 +393,8 @@ FW_VERSIONS = {
       b'39990-TME-T030\x00\x00',
       b'39990-TME-T120\x00\x00',
       b'39990-TMT-T010\x00\x00',
+      b'39990+TLA+A040\x00\x00',  # AnglePTM firmware
+      b'39990+TLA+A220\x00\x00',  # AnglePTM firmware
     ],
     (Ecu.electricBrakeBooster, 0x18da2bf1, None): [
       b'46114-TLA-A040\x00\x00',
@@ -508,6 +515,7 @@ FW_VERSIONS = {
     (Ecu.eps, 0x18da30f1, None): [
       b'39990-T5R-C020\x00\x00',
       b'39990-T5R-C030\x00\x00',
+      b'39990+T5R+C030\x00\x00',  # AnglePTM firmware
     ],
     (Ecu.gateway, 0x18daeff1, None): [
       b'38897-T5A-J010\x00\x00',
@@ -644,6 +652,7 @@ FW_VERSIONS = {
       b'39990-THR-A020\x00\x00',
       b'39990-THR,A020\x00\x00',
       b'39990-THR-A030\x00\x00',
+      b'39990+THR+A020\x00\x00',  # AnglePTM firmware
     ],
     (Ecu.srs, 0x18da53f1, None): [
       b'77959-THR-A010\x00\x00',
@@ -793,6 +802,8 @@ FW_VERSIONS = {
       b'39990-TGS-A230\x00\x00',
       b'39990-TGS-A320\x00\x00',
       b'39990-TGS-A410\x00\x00',
+      b'39990+TG7+A060\x00\x00',  # AnglePTM firmware
+      b'39990+TG7+A070\x00\x00',  # AnglePTM firmware
     ],
     (Ecu.fwdRadar, 0x18dab0f1, None): [
       b'36161-TG7-A310\x00\x00',
@@ -901,6 +912,7 @@ FW_VERSIONS = {
       b'39990-TJB-A030\x00\x00',
       b'39990-TJB-A040\x00\x00',
       b'39990-TJB-A130\x00\x00',
+      b'39990+TJB+A220\x00\x00',  # AnglePTM firmware
     ],
   },
   # mid-model refresh
@@ -919,6 +931,7 @@ FW_VERSIONS = {
       b'39990-T6Z-A050\x00\x00',
       b'39990-T6Z-A110\x00\x00',
       b'39990-T6Z,A110\x00\x00',
+      b'39990+T6Z+A110\x00\x00',  # AnglePTM firmware
     ],
     (Ecu.fwdRadar, 0x18dab0f1, None): [
       b'36161-T6Z-A020\x00\x00',
@@ -949,6 +962,7 @@ FW_VERSIONS = {
   CAR.HONDA_INSIGHT: {
     (Ecu.eps, 0x18da30f1, None): [
       b'39990-TXM-A040\x00\x00',
+      b'39990+TXM+A040\x00\x00',  # AnglePTM firmware
     ],
     (Ecu.fwdRadar, 0x18dab0f1, None): [
       b'36802-TXM-A070\x00\x00',

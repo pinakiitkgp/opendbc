@@ -65,3 +65,11 @@ CM_ SG_ 1700 ANGLE_LOOP_ACTIVE "v3: same as ANGLE_LOOP_RUNNING";
 CM_ SG_ 1700 ANGLE_REF "v3: the loop reference angle (filtered, rate-limited target), same scale and sign as STEER_ANGLE";
 CM_ SG_ 1700 ANGLE_OUT "v3: the value the loop wrote into the 0xE4 torque latch (STEER_TORQUE units)";
 CM_ SG_ 1700 REQUESTED_MODE "(last valid 0xE4 byte 3 >> 1) & 7, 0 if no valid latch";
+
+BO_ 1698 EPS_LINEAR_ANGLE: 8 EPS
+ SG_ LINEAR_ANGLE : 7|16@0- (-0.1,0) [-3276.8|3276.7] "deg" EON
+ SG_ PUBLISHED_ANGLE : 23|16@0- (-0.1,0) [-3276.8|3276.7] "deg" EON
+ SG_ INTEGRATOR : 39|16@0- (1,0) [-32768|32767] "" EON
+ SG_ LOOP_RUNNING : 48|1@0+ (1,0) [0|1] "" EON
+ SG_ COUNTER : 61|2@0+ (1,0) [0|3] "" EON
+ SG_ CHECKSUM : 59|4@0+ (1,0) [0|15] "" EON

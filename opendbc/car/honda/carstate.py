@@ -13,6 +13,8 @@ from opendbc.car.interfaces import CarStateBase
 from opendbc.car.honda.hud_objects import HudObjectTracker
 from opendbc.car.honda.yaw_rate import get_yaw_rate_calibration
 
+from opendbc.car.honda.angle_profiles import angle_profile
+from opendbc.car.honda.meps.linear_angle import MSG as EPS_LINEAR_ANGLE_MSG, LinearAngle
 from opendbc.sunnypilot.car.honda.clarity_eps import MSG as EPS_CAL_STATUS_MSG, EpsCalStatus
 from opendbc.sunnypilot.car.honda.carstate_ext import CarStateExt
 from opendbc.sunnypilot.car.honda.carstate import HondaCarStateFeatures
@@ -37,6 +39,7 @@ class CarState(CarStateBase, CarStateExt):
     self.nrdr = HondaCarStateFeatures(CP, config)
     # Clarity mode-switch / angle-loop EPS: 0x6A4 status interlock (no-op on every other car)
     self.eps_cal_status = EpsCalStatus(CP, CP_SP)
+    self.linear_angle = LinearAngle(self.eps_cal_status.angle, required=angle_profile(CP) is not None)
     self.keep_pcm_acc = clarity_braking.qualified(CP, CP_SP)
     self.pcm_acc_active = False
 
@@ -234,6 +237,11 @@ class CarState(CarStateBase, CarStateExt):
 
     ret.steeringAngleDeg = cp.vl["STEERING_SENSORS"]["STEER_ANGLE"]
     ret.steeringRateDeg = cp.vl["STEERING_SENSORS"]["STEER_ANGLE_RATE"]
+    if self.linear_angle.update(cp, self.eps_cal_status.build_id):
+      ret.steerFaultTemporary = True
+    ret.steeringAngleLinear = self.linear_angle.latched
+    if ret.steeringAngleLinear:
+      ret.steeringAngleDeg = self.linear_angle.angle_deg
 
     ret.leftBlinker, ret.rightBlinker = self.update_blinker_from_stalk(
       250, cp.vl["SCM_FEEDBACK"]["LEFT_BLINKER"], cp.vl["SCM_FEEDBACK"]["RIGHT_BLINKER"])
@@ -249,7 +257,8 @@ class CarState(CarStateBase, CarStateExt):
     ret.gasPressed = cp.vl["POWERTRAIN_DATA"]["PEDAL_GAS"] > 1e-5
 
     ret.steeringTorque = cp.vl[self.steer_status_msg]["STEER_TORQUE_SENSOR"]
-    ret.steeringPressed = self.nrdr.steering_pressed(ret.steeringTorque, ret.steeringAngleDeg)
+    ret.steeringPressed = self.nrdr.steering_pressed(ret.steeringTorque, cp.vl["STEERING_SENSORS"]["STEER_ANGLE"],
+                                                   rack_linear_angle=ret.steeringAngleLinear)
 
     if self.CP.flags & HondaFlags.BOSCH:
       # The PCM always manages its own cruise control state, but doesn't publish it
@@ -430,7 +439,9 @@ class CarState(CarStateBase, CarStateExt):
       pt_messages.append(("LKAS_HUD", 10))
     if EpsCalStatus(CP, CP_SP).enabled:
       # 0x6A4 exists only on the mode-switch / angle-loop EPS builds; NaN frequency so its absence never costs canValid
-      pt_messages.append((EPS_CAL_STATUS_MSG, float('nan')))
+      pt_messages.append((EPS_CAL_STATUS_MSG, math.nan))
+    if self.linear_angle.enabled:
+      pt_messages.append((EPS_LINEAR_ANGLE_MSG, math.nan))
     cam_messages = []
     if self.CP.flags & HondaFlags.BOSCH_CANFD:
       # Radar-alive and relay-open detection for the deferred radar disable (see carcontroller).

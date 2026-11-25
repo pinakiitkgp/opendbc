@@ -34,4 +34,5 @@ class HondaSafetyFlagsSP:
   STOCK_LONGITUDINAL = 4
   GAS_INTERCEPTOR_THRESHOLD_512 = 8
   CLARITY_INTERCEPTOR_BRAKE = 16
-  CLARITY_ANGLE = 32  # Clarity angle-mode EPS: panda's angle rule on 0xE4 (honda.h HONDA_PARAM_SP_CLARITY_ANGLE)
+  CLARITY_ANGLE = 32  # Honda EPS angle rule
+  ANGLE_PROFILE_MASK = 0xE000  # Rack-linear profile row in the separate Honda safety word
