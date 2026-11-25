@@ -668,6 +668,9 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
 
     # *** rate limit steer ***
     limited_torque, lkas_active = self.nrdr.update_steering_torque(CC, CS, live, self.last_torque)
+    status = CS.eps_cal_status
+    if status.stock_angle_ptm and not status.stock_ready:
+      limited_torque, lkas_active = 0.0, False
     if (self.CP.carFingerprint == CAR.ACURA_MDX_3G) and \
         (self.apply_brake_last > 0 or self.new_accel < 1e-5): # lower steer limits while braking
       brake_limit = float(233.0 / self.params.STEER_MAX)
@@ -792,10 +795,9 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     # Send steering command.
     angle_payload = arm_bits = 0
     angle_arm = None
-    use_rack_linear = self.angle_sender_v2 is not None and (CS.eps_cal_status.requires_v2 or
-                      CS.eps_cal_status.build_id in LINEAR_ANGLE_BUILDS or CS.linear_angle.latched)
+    use_rack_linear = self.angle_sender_v2 is not None and (status.requires_v2 or
+                      status.build_id in LINEAR_ANGLE_BUILDS or CS.linear_angle.latched)
     if use_rack_linear:
-      status = CS.eps_cal_status
       sender = self.angle_sender_v2
       ready = status.protocol == 2 and status.angle_ready and CS.linear_angle.steer_ok
       holding = ready and status.authority_ready and self.angle_arm_supported

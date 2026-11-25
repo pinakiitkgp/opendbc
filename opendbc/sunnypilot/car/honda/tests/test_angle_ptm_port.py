@@ -18,10 +18,10 @@ from opendbc.sunnypilot.car.interfaces import setup_interfaces
 from opendbc.sunnypilot.car.tests.runtime_config import make_test_car_config, with_honda_config
 
 
-def angle_config(platform, *versions, alpha_long=False):
+def angle_config(platform, *versions, alpha_long=False, angle=True):
   firmware = [structs.CarParams.CarFw(ecu="eps", fwVersion=version, address=0x18DA30F1) for version in versions]
   fp = gen_empty_fingerprint()
-  config = with_honda_config(make_test_car_config(), clarity_angle_mode=True)
+  config = with_honda_config(make_test_car_config(), clarity_angle_mode=angle)
   cp = CarInterface.get_params(platform, fp, firmware, alpha_long, False, False, interface_config=config)
   cp.carFw = firmware
   sp = CarInterface.get_params_sp(cp, platform, fp, firmware, alpha_long, False, False)
@@ -54,6 +54,30 @@ def test_donor_identities_select_angle_and_resolve_dbc(platform, versions):
 def test_crv_angle_requires_exact_unambiguous_software_id(versions, expected):
   cp, sp, _ = angle_config(CAR.HONDA_CRV_5G, *versions)
   assert angle_ptm_available(cp, sp) == expected
+
+
+@pytest.mark.parametrize("alpha_long", [False, True])
+def test_crv_angle_mode_off_uses_stock_torque_calibration_and_confirmed_mode(alpha_long):
+  cp, sp, config = angle_config(CAR.HONDA_CRV_5G, b"39990+TLA+A220", alpha_long=alpha_long, angle=False)
+  stock, _, _ = angle_config(CAR.HONDA_CRV_5G, b"39990-TLA-A220", alpha_long=alpha_long, angle=False)
+  setup_interfaces(CarInterface, cp, sp, config)
+  assert angle_ptm_available(cp, sp)
+  assert cp.steerControlType == structs.CarParams.SteerControlType.torque
+  assert not sp.safetyParam & (HondaSafetyFlagsSP.CLARITY_ANGLE | HondaSafetyFlagsSP.ANGLE_PROFILE_MASK)
+  assert list(cp.lateralParams.torqueV) == list(stock.lateralParams.torqueV)
+  assert list(cp.lateralTuning.pid.kpV) == list(stock.lateralTuning.pid.kpV)
+  assert cp.openpilotLongitudinalControl == stock.openpilotLongitudinalControl
+
+  ci = CarInterface(cp, sp, config)
+  packer = CANPacker(DBC[CAR.HONDA_CRV_5G][Bus.pt])
+  for i, (build, mode, ready) in enumerate(((0x0D, 1, False), (0xFF, 0, False), (0x0D, 0, True), (0x0D, 1, False))):
+    status = packer.make_can_msg("EPS_CAL_STATUS", 1, {"REQUESTED_MODE": 8, "ACTIVE_MODE": mode, "BUILD_ID": build})
+    ci.update([(1_000_000_000 + i * 20_000_000, [status])])
+    assert ci.CS.eps_cal_status.stock_ready is ready
+    _, data = e4(ci, True, v=20.0, torque=0.25)
+    assert data[3] == 0 and not data[2] & 0x20
+    assert bool(data[2] & 0x80) is ready
+    assert (data[:2] != b"\x00\x00") is ready
 
 
 def test_linear_angle_yields_until_the_driver_releases_below_hysteresis():

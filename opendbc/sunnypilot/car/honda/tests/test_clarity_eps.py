@@ -79,17 +79,20 @@ def e4(ci, lat, angle_des=0.0, measured=0.0, v=10.0, pressed=False, torque=0.0, 
 
 # --- torque mode: byte 3 request, firmware recognition ---
 
-@pytest.mark.parametrize("fw,byte3", [(PTM, 0x02), (PTM2, 0x02), (STOCK, 0x00)])
+@pytest.mark.parametrize("fw,byte3", [(PTM, 0x02), (PTM2, 0x00), (STOCK, 0x00)])
 def test_torque_mode_byte3(fw, byte3):
   ci = clarity(fw)
   _, d = e4(ci, True, torque=0.1)
   assert d[3] == byte3 and not d[2] & 0x20
 
 
-def test_ptm2_id_is_a_modified_clarity_like_ptm():
-  a, b = clarity(PTM2), clarity(PTM)
-  assert a.CP_SP.flags & HondaFlagsSP.EPS_MODIFIED and b.CP_SP.flags & HondaFlagsSP.EPS_MODIFIED
-  assert list(a.CP.lateralParams.torqueBP) == list(b.CP.lateralParams.torqueBP)
+def test_angle_ptm_off_uses_the_stock_clarity_torque_tune():
+  off, stock = clarity(PTM2), clarity(STOCK)
+  assert not off.CP_SP.flags & HondaFlagsSP.EPS_MODIFIED
+  assert ce.angle_ptm_available(off.CP, off.CP_SP)
+  assert list(off.CP.lateralParams.torqueBP) == list(stock.CP.lateralParams.torqueBP)
+  assert list(off.CP.lateralParams.torqueV) == list(stock.CP.lateralParams.torqueV)
+  assert list(off.CP.lateralTuning.pid.kpV) == list(stock.CP.lateralTuning.pid.kpV)
 
 
 def test_torque_mode_without_status_frame_is_ok_and_wrong_mode_faults():
@@ -441,10 +444,33 @@ def test_v2_ignores_the_3_0_profile_setting():
   assert peak == pytest.approx(ce.angle_limit(15.0), abs=0.06)           # one profile: panda's 3.6 m/s^2 angle
 
 
-def test_v2_on_a_torque_mode_clarity_is_not_built():
+@pytest.mark.parametrize("protocol", [1, 2])
+def test_angle_ptm_off_sends_torque_only_with_fresh_fault_free_stock_mode(protocol):
   ci = clarity(PTM2, angle=False)
-  FeedV2(ci).run_v4(8, mode=0, steering=False, reason=1)
-  assert ci.CS.eps_cal_status.fault == "mode_not_built"
+  f = FeedV2(ci)
+
+  def feed(stock_mode, fault=False):
+    if protocol == 2:
+      f.run_v4(8, mode=0 if stock_mode else 1, steering=False, fault=fault)
+    else:
+      f.run(8, active=0 if stock_mode else 3, requested=0, running=False, fault=fault)
+
+  def send():
+    _, data = e4(ci, True, torque=0.25)
+    assert data[3] == 0 and not data[2] & 0x20
+    return bool(data[2] & 0x80)
+
+  assert not send()
+  feed(stock_mode=False)
+  assert not send()
+  feed(stock_mode=True, fault=True)
+  assert not send()
+  feed(stock_mode=True)
+  assert send()
+  for _ in range(ce.STATUS_TIMEOUT_FRAMES + 1):
+    f.t += 10_000_000
+    ci.update([(f.t, [])])
+  assert not send()
 
 
 # --- panda: the angle bit and the sender's limits ---

@@ -103,21 +103,24 @@ def is_angle_ptm_id(fw_version: bytes) -> bool:
   return len(v) >= 10 and v[5:6] == ANGLE_PTM_SEPARATOR and v[9:10] == ANGLE_PTM_SEPARATOR
 
 
-def angle_ptm_available(CP, CP_SP) -> bool:
-  required = HondaFlagsSP.EPS_MODIFIED | HondaFlagsSP.EPS_ANGLE_PTM
-  platform = getattr(CP, "carFingerprint", None)
-  if getattr(CP, "brand", "") != "honda" or platform not in ANGLE_PTM_FIRMWARE:
+def angle_ptm_firmware_matches(platform, car_fw) -> bool:
+  if platform not in ANGLE_PTM_FIRMWARE:
     return False
-  if getattr(CP_SP, "flags", 0) & required != required:
-    return False
-  versions = {bytes(fw.fwVersion).rstrip(b"\0") for fw in getattr(CP, "carFw", ()) if fw.ecu == "eps"}
+  versions = {bytes(fw.fwVersion).rstrip(b"\0") for fw in car_fw if fw.ecu == "eps"}
   # Auxiliary EPS data identifiers are not the Honda software part number.
   part_numbers = {version for version in versions if version.startswith(b"39990")}
   return len(part_numbers) == 1 and part_numbers <= ANGLE_PTM_FIRMWARE[platform]
 
 
+def angle_ptm_available(CP, CP_SP) -> bool:
+  return (getattr(CP, "brand", "") == "honda" and bool(getattr(CP_SP, "flags", 0) & HondaFlagsSP.EPS_ANGLE_PTM) and
+          angle_ptm_firmware_matches(getattr(CP, "carFingerprint", None), getattr(CP, "carFw", ())))
+
+
 def apply_angle_mode(CP, CP_SP, requested: bool) -> None:
-  if requested and angle_ptm_available(CP, CP_SP):
+  if not angle_ptm_available(CP, CP_SP):
+    return
+  if requested:
     CP_SP.flags |= HondaFlagsSP.CLARITY_ANGLE_MODE.value
     CP.steerControlType = structs.CarParams.SteerControlType.angle
     CP_SP.safetyParam |= HondaSafetyFlagsSP.CLARITY_ANGLE
@@ -126,6 +129,8 @@ def apply_angle_mode(CP, CP_SP, requested: bool) -> None:
       CP_SP.safetyParam |= safety_param_bits(profile)
       CP.steerRatio = own_geometry(CP).steer_ratio
       # Retain nrdr's platform speed floor. The variant's steering ECU still owns its hardware lockouts.
+  else:
+    CP_SP.flags &= ~HondaFlagsSP.EPS_MODIFIED.value
 
 
 def angle_mode(CP_SP) -> bool:
@@ -277,8 +282,9 @@ def requested_eps_mode(CP, CP_SP) -> int:
 class EpsCalStatus:
   def __init__(self, CP, CP_SP):
     self.requested = requested_eps_mode(CP, CP_SP)
-    self.enabled = self.requested != 0
     self.angle = self.requested == EPS_MODE_ANGLE   # angle mode chosen at startup; the mode (3 or 4) can follow set_angle_profile
+    self.stock_angle_ptm = self.requested == 0 and angle_ptm_available(CP, CP_SP)
+    self.enabled = self.requested != 0 or self.stock_angle_ptm
     self.announced = False      # a valid 0x6A4 seen since start: this EPS is switch-capable
     self.frames_since = 0
     self.last_ts = 0
@@ -290,7 +296,7 @@ class EpsCalStatus:
     self.angle_fault_why = 0    # 1 jump, 2 stale, 3 angle invalid
     self.angle_ref_deg = 0.0
     self.angle_out = 0
-    self.requires_v2 = self.angle and CP.carFingerprint != CAR.HONDA_CLARITY
+    self.requires_v2 = (self.angle or self.stock_angle_ptm) and CP.carFingerprint != CAR.HONDA_CLARITY
     self.protocol = 2 if self.requires_v2 else 1
     self.reason = ""            # v2: the EPS's REASON for not steering (layout 4 byte 2)
     self.clamp = False          # v2: the EPS lateral-accel clamp is acting
@@ -310,7 +316,7 @@ class EpsCalStatus:
     if self.announced:
       fault = self._check(cp.vl[MSG])
     else:
-      fault = "no_status" if self.angle else ""
+      fault = "no_status" if self.angle or self.stock_angle_ptm else ""
     if fault != self.fault:
       carlog.warning(f"EPS_CAL_STATUS: {fault or 'ok'} (active mode {self.active_mode}, requested {self.requested}, build {self.build_id:#04x})")
       self.fault = fault
@@ -340,6 +346,8 @@ class EpsCalStatus:
       self.angle_ref_deg, self.angle_out = float(vl["ANGLE_REF"]), int(vl["ANGLE_OUT"])
       if vl["ANGLE_FAULT"]:
         return "angle_fault"
+    if self.stock_angle_ptm and self.build_id in ANGLE_BUILDS and vl["ANGLE_FAULT"]:
+      return "angle_fault"
     return ""
 
   def _check_v2(self, vl) -> str:
@@ -351,6 +359,10 @@ class EpsCalStatus:
     self.reason, self.clamp = s["reason_name"], s["clamp"]
     if self.build_id not in V2_BUILDS:
       return "unknown_build"
+    if self.stock_angle_ptm:
+      if s["fault"]:
+        return f"angle_fault ({self.reason})"
+      return "" if self.active_mode == 0 else "inactive_mode"
     if not self.angle:
       return "mode_not_built"                 # v2 has no torque PTM mode
     if self.requires_v2 and self.build_id == 0x0B:
@@ -400,3 +412,7 @@ class EpsCalStatus:
   def angle_ready(self) -> bool:
     """Angle mode only: the EPS runs the angle loop's mode on an angle build, reports no fault, and is not lost."""
     return self.angle and self.announced and self.fault == ""
+
+  @property
+  def stock_ready(self) -> bool:
+    return self.stock_angle_ptm and self.announced and self.fault == ""

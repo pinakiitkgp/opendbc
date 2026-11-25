@@ -13,7 +13,7 @@ from opendbc.car.honda.radar_interface import RadarInterface
 from opendbc.car.interfaces import CarInterfaceBase
 
 from opendbc.sunnypilot.car.honda.interface_ext import configure_honda_platform, configure_modified_eps
-from opendbc.sunnypilot.car.honda.clarity_eps import is_angle_ptm_id
+from opendbc.sunnypilot.car.honda.clarity_eps import angle_ptm_firmware_matches, is_angle_ptm_id
 from opendbc.sunnypilot.car.honda.values_ext import HondaFlagsSP, HondaSafetyFlagsSP
 from opendbc.sunnypilot.car.runtime_config import SunnypilotCarConfig
 
@@ -413,6 +413,9 @@ class CarInterface(CarInterfaceBase):
       if fw.ecu == "eps" and is_angle_ptm_id(fw.fwVersion):
         ret.flags |= HondaFlagsSP.EPS_ANGLE_PTM.value
 
+    # AnglePTM falls back to the EPS's stock torque calibration when angle mode is off.
+    modified_torque = bool(ret.flags & HondaFlagsSP.EPS_MODIFIED) and not angle_ptm_firmware_matches(candidate, car_fw)
+
     if bool(stock_cp.flags & HondaFlags.NIDEC) and bool(stock_cp.flags & HondaFlags.HYBRID):
       ret.flags |= HondaFlagsSP.NIDEC_HYBRID.value
       ret.safetyParam |= HondaSafetyFlagsSP.NIDEC_HYBRID
@@ -424,7 +427,7 @@ class CarInterface(CarInterfaceBase):
       ret.flags |= HondaFlagsSP.HAS_CAMERA_MESSAGES.value
 
     if candidate == CAR.HONDA_CIVIC:
-      if ret.flags & HondaFlagsSP.EPS_MODIFIED:
+      if modified_torque:
         # stock request input values:     0x0000, 0x00DE, 0x014D, 0x01EF, 0x0290, 0x0377, 0x0454, 0x0610, 0x06EE
         # stock request output values:    0x0000, 0x0917, 0x0DC5, 0x1017, 0x119F, 0x140B, 0x1680, 0x1680, 0x1680
         # modified request output values: 0x0000, 0x0917, 0x0DC5, 0x1017, 0x119F, 0x140B, 0x1680, 0x2880, 0x3180
@@ -435,21 +438,21 @@ class CarInterface(CarInterfaceBase):
         stock_cp.lateralTuning.pid.kpV, stock_cp.lateralTuning.pid.kiV = [[0.3], [0.1]]
 
     elif candidate in (CAR.HONDA_CIVIC_BOSCH, CAR.HONDA_CIVIC_BOSCH_DIESEL):
-      if ret.flags & HondaFlagsSP.EPS_MODIFIED:
+      if modified_torque:
         stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 2564, 8000], [0, 2564, 3840]]
         stock_cp.lateralTuning.pid.kpV, stock_cp.lateralTuning.pid.kiV = [[0.3], [0.09]]  # 2.5x Modded EPS
 
     elif candidate == CAR.HONDA_CIVIC_2022:
-      if ret.flags & HondaFlagsSP.EPS_MODIFIED:
+      if modified_torque:
         stock_cp.lateralParams.torqueBP, stock_cp.lateralParams.torqueV = [[0, 2564, 8000], [0, 2564, 3840]]
         stock_cp.lateralTuning.pid.kpV, stock_cp.lateralTuning.pid.kiV = [[0.3], [0.09]]  # 2.5x Modded EPS
 
     elif candidate == CAR.HONDA_ACCORD:
-      if ret.flags & HondaFlagsSP.EPS_MODIFIED:
+      if modified_torque:
         stock_cp.lateralTuning.pid.kpV, stock_cp.lateralTuning.pid.kiV = [[0.3], [0.09]]
 
     elif candidate == CAR.HONDA_CRV_5G:
-      if ret.flags & HondaFlagsSP.EPS_MODIFIED:
+      if modified_torque:
         # stock request input values:     0x0000, 0x00DB, 0x01BB, 0x0296, 0x0377, 0x0454, 0x0532, 0x0610, 0x067F
         # stock request output values:    0x0000, 0x0500, 0x0A15, 0x0E6D, 0x1100, 0x1200, 0x129A, 0x134D, 0x1400
         # modified request output values: 0x0000, 0x0500, 0x0A15, 0x0E6D, 0x1100, 0x1200, 0x1ACD, 0x239A, 0x2800
@@ -459,7 +462,7 @@ class CarInterface(CarInterfaceBase):
     elif candidate == CAR.HONDA_CLARITY:
       stock_cp.autoResumeSng = True
       stock_cp.minEnableSpeed = -1
-      if ret.flags & HondaFlagsSP.EPS_MODIFIED:
+      if modified_torque:
         for fw in car_fw:
           if fw.ecu == "eps" and b"-" not in fw.fwVersion and b"," in fw.fwVersion:
             stock_cp.lateralTuning.pid.kf = 0.00004
