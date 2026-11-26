@@ -142,7 +142,10 @@ def create_acc_commands(packer, CAN, enabled, active, accel, gas, stopping_count
   return commands
 
 
-def create_steering_control(packer, CAN, apply_torque, lkas_active, tja_control, eps_mode=0, angle_payload=0, arm_bits=0, angle_arm=None):
+def create_steering_control(packer, CAN, apply_torque, lkas_active, tja_control, eps_mode=0, angle_payload=0, arm_bits=0,
+                            angle_arm=None, v3_byte2=None):
+  if v3_byte2 is not None:
+    return _create_steering_control_v3(packer, CAN, apply_torque, v3_byte2)
   values = {
     "STEER_TORQUE": apply_torque if lkas_active else 0,
     "STEER_TORQUE_REQUEST": lkas_active,
@@ -166,6 +169,20 @@ def create_steering_control(packer, CAN, apply_torque, lkas_active, tja_control,
     else:
       values["SET_ME_X00"] = angle_payload | arm_bits
 
+  return packer.make_can_msg("STEERING_CONTROL", CAN.lkas, values)
+
+
+def _create_steering_control_v3(packer, CAN, target, b2):
+  """Encode the v3 angle marker while leaving the legacy torque request clear."""
+  values = {"STEER_TORQUE": target, "STEER_TORQUE_REQUEST": 0}
+  sigs = packer.dbc.name_to_msg["STEERING_CONTROL"].sigs
+  if "SET_ME_X00" in sigs:
+    values["SET_ME_X00"] = b2 & 0x7F
+  else:
+    values["STEER_CONTROL_ARM"] = (b2 >> 2) & 3
+    values["STEER_CONTROL_ARM_B6"] = (b2 >> 6) & 1
+    values["DRIVER_OVERRIDE"] = (b2 >> 1) & 1
+    values["ANGLE_STANDBY"] = b2 & 1
   return packer.make_can_msg("STEERING_CONTROL", CAN.lkas, values)
 
 

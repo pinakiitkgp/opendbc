@@ -134,6 +134,16 @@ class AngleModeSender:
     self.linear = profile is not None   # linear-angle EPS (0x0C on): desired / measured / limits are rack-linear (CarController sets it)
     self.out_angle = 0.0      # the angle actually sent (= apply_angle once the effort fade is done)
 
+  def _step(self, v_ego: float) -> float:
+    return min(float(np.interp(v_ego, _V, ANGLE_STEP_DEG)), std_angle_step(v_ego, self.linear, self.profile))
+
+  def follow_wheel(self, measured_deg: float, measured_rate_deg_s: float, v_ego: float) -> int:
+    """Track the wheel during v3 YIELD and restart the effort fade on release."""
+    self.apply_angle, self.apply_rate, self.active_frames = float(measured_deg), float(measured_rate_deg_s), 0
+    step = self._step(v_ego)
+    self.out_angle += float(np.clip(measured_deg - self.out_angle, -step, step))
+    return angle_to_raw(self.out_angle)
+
   def update(self, lat_active: bool, desired_deg: float, measured_deg: float, v_ego: float,
              angle_ready: bool, measured_rate_deg_s: float = 0.0, engage_s: float = ENGAGE_S,
              rate_limit_deg_s: float = 0.0, effort_fade: bool = True) -> tuple[int, bool, int]:
@@ -154,7 +164,7 @@ class AngleModeSender:
     target = float(np.clip(float(desired_deg), -lim, lim))
     fade = 1.0 if engage_s <= 0.0 else min(1.0, ENGAGE_FLOOR + (1.0 - ENGAGE_FLOOR) * self.active_frames * DT_CTRL / engage_s)
     # step: 0.6 x the EPS jump threshold and panda's jerk step (the 3.6 m/s^3 standard)
-    step = min(float(np.interp(v_ego, _V, ANGLE_STEP_DEG)), std_angle_step(v_ego, self.linear, self.profile))
+    step = self._step(v_ego)
     rate_cap = min(float(np.interp(v_ego, _VT, TARGET_RATE_DEG_S)), step / DT_CTRL)
     if rate_limit_deg_s > 0.0:                # Steering Angle Rate Limit (Night Star / Galaxy), 0 = off
       rate_cap = min(rate_cap, rate_limit_deg_s)

@@ -369,7 +369,7 @@ def test_v1_until_the_first_layout4_frame():
 
 def test_unknown_v2_build_never_steers():
   ci = clarity(PTM2, angle=True)
-  FeedV2(ci).run_v4(8, build=0x0E)
+  FeedV2(ci).run_v4(8, build=0x0F)
   assert ci.CS.eps_cal_status.fault == "unknown_build"
   assert e4(ci, True, 5.0)[1][0:3] == bytes(3)
 

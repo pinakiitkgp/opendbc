@@ -293,11 +293,17 @@ static bool honda_angle_tx_violation(const CANPacket_t *msg) {
   const int target = to_signed((msg->data[0] << 8) | msg->data[1], 16);
   const bool request = GET_BIT(msg, 23U);
   const bool payload = GET_BIT(msg, 21U);
-  const bool steering = request && payload;
+  // Protocol v3 reserves arm value 3 for angle and zero-target standby. DRIVE and YIELD share the same limits.
+  const uint8_t b2 = msg->data[2];
+  const bool v3_marker = (b2 & 0x0CU) == 0x0CU;
+  const bool v3_angle = ((b2 & 0xBFU) == 0x0CU) && (msg->data[3] == 0U);
+  const bool v3_standby = ((b2 & 0xBFU) == 0x0DU) && (target == 0) && (msg->data[3] == 0U);
+  const bool steering = (request && payload) || v3_angle;
   bool violation = false;
 
   if (!honda_lateral_allowed() || !steering) {
     violation = (target != 0) || request || payload;
+    violation |= v3_marker && !v3_standby;
   } else {
     // fudge the speed down 1 m/s: both limits only widen as speed falls
     const float speed = SAFETY_MAX(((float)vehicle_speed.min / VEHICLE_SPEED_FACTOR) - 1.0f, 1.0f);
@@ -324,6 +330,7 @@ static bool honda_angle_tx_violation(const CANPacket_t *msg) {
     violation |= (honda_angle_profile != 0U) && !honda_angle_vm_valid();
     violation |= safety_max_limit_check(target, hi + step_can, lo - step_can);
     violation |= safety_max_limit_check(target, lim_can, -lim_can);
+    violation |= v3_marker && !v3_angle;
   }
   honda_angle_last = target;
   // not steering, or a violation: the next target must be within one step of the wheel, measured when it is checked
@@ -579,6 +586,9 @@ static bool honda_tx_hook(const CANPacket_t *msg) {
       if (steer_applied) {
         tx = false;
       }
+    }
+    if ((msg->addr == 0xE4U) && ((msg->data[2] & 0x0CU) == 0x0CU)) {
+      tx = false;
     }
   } else {
     // not a steering message

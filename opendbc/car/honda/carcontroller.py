@@ -10,7 +10,7 @@ from opendbc.car import ACCELERATION_DUE_TO_GRAVITY, Bus, DT_CTRL, rate_limit, m
 from opendbc.car.honda import hondacan
 from opendbc.car.honda.angle_profiles import angle_profile
 from opendbc.car.honda.meps import angle_sender as angle_v2
-from opendbc.car.honda.meps.protocol import LINEAR_ANGLE_BUILDS
+from opendbc.car.honda.meps.protocol import LINEAR_ANGLE_BUILDS, V3_STANDBY, v3_byte2
 from opendbc.car.honda.bosch_longitudinal import BoschLongitudinal, bosch_a_harness, qualified as bosch_long_qualified, star7_params
 from opendbc.car.honda.values import CAR, HONDA_BOSCH, CarControllerParams, CruiseButtons, CruiseSettings, HondaFlags
 from opendbc.car.interfaces import CarControllerBase
@@ -795,9 +795,26 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
     # Send steering command.
     angle_payload = arm_bits = 0
     angle_arm = None
+    v3_command = None
     use_rack_linear = self.angle_sender_v2 is not None and (status.requires_v2 or
                       status.build_id in LINEAR_ANGLE_BUILDS or CS.linear_angle.latched)
-    if use_rack_linear:
+    if self.angle_sender_v2 is not None and status.protocol == 3:
+      sender = self.angle_sender_v2
+      ready = status.angle_ready and CS.linear_angle.steer_ok
+      yielding = CS.out.steeringPressed
+      sender.linear = CS.linear_angle.latched or sender.profile is not None
+      if CC.latActive and ready and yielding and sender.sent_active:
+        apply_torque = sender.follow_wheel(CS.out.steeringAngleDeg, CS.out.steeringRateDeg, CS.out.vEgo)
+        lkas_active = True
+      else:
+        apply_torque, lkas_active, _ = sender.update(
+          CC.latActive, actuators.steeringAngleDeg, CS.out.steeringAngleDeg, CS.out.vEgo,
+          ready, CS.out.steeringRateDeg, live.override_fade_up_s, live.angle_rate_limit_deg_s,
+        )
+      self.eps_mode = 0
+      v3_command = v3_byte2(not yielding) if lkas_active else V3_STANDBY
+      status.note_angle_request(lkas_active)
+    elif use_rack_linear:
       sender = self.angle_sender_v2
       ready = status.protocol == 2 and status.angle_ready and CS.linear_angle.steer_ok
       holding = ready and status.authority_ready and self.angle_arm_supported
@@ -837,7 +854,7 @@ class CarController(CarControllerBase, MadsCarController, GasInterceptorCarContr
       apply_torque = raw
     can_sends.append(hondacan.create_steering_control(self.packer, self.CAN, apply_torque, lkas_active, self.tja_control,
                                                       eps_mode=self.eps_mode, angle_payload=angle_payload,
-                                                      arm_bits=arm_bits, angle_arm=angle_arm))
+                                                      arm_bits=arm_bits, angle_arm=angle_arm, v3_byte2=v3_command))
 
     if self.mvl_longitudinal and not self.civic_pcm:
       pcm_speed, pcm_accel = mvl_longitudinal.commands(

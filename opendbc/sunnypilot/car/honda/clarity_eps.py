@@ -37,7 +37,7 @@ import numpy as np
 from opendbc.car import DT_CTRL, structs
 from opendbc.car.carlog import carlog
 from opendbc.car.honda.angle_profiles import ANGLE_PTM_FIRMWARE, angle_profile, own_geometry, safety_param_bits
-from opendbc.car.honda.meps.protocol import V2_BUILDS, V2_MODE_ANGLE, byte3_v2, decode_layout4, is_layout4
+from opendbc.car.honda.meps.protocol import V2_MODE_ANGLE, byte3_v2, decode_layout4, is_layout4, protocol_of
 from opendbc.car.honda.values import CAR
 from opendbc.sunnypilot.car.honda.values_ext import HondaFlagsSP, HondaSafetyFlagsSP
 
@@ -326,8 +326,8 @@ class EpsCalStatus:
     if self.frames_since > STATUS_TIMEOUT_FRAMES:
       return "lost"
     if is_layout4(vl):
-      return self._check_v2(vl)
-    if self.requires_v2 or self.protocol == 2:
+      return self._check_layout4(vl)
+    if self.requires_v2 or self.protocol in (2, 3):
       return "unsupported_build"
     self.protocol = 1
     self.active_mode, self.build_id = int(vl["ACTIVE_MODE"]), int(vl["BUILD_ID"])
@@ -350,14 +350,16 @@ class EpsCalStatus:
       return "angle_fault"
     return ""
 
-  def _check_v2(self, vl) -> str:
-    """Layout 4: a known v2 build, MODE 1 (angle), no FAULT; an angle request held more than LOOP_START_FRAMES without
+  def _check_layout4(self, vl) -> str:
+    """Layout 4: a known build, MODE 1 (angle), no FAULT; an angle request held more than LOOP_START_FRAMES without
     STEERING faults "loop_not_running (<REASON>)" for LOOP_RETRY_FRAMES, then the request may retry. STEERING stays set
     at AUTH 0 (AUTHORITY_ZERO), so a driver override with the request held does not trip it."""
     s = decode_layout4(vl)
-    self.protocol, self.build_id, self.active_mode = 2, s["build"], s["mode"]
+    self.build_id, self.active_mode = s["build"], s["mode"]
     self.reason, self.clamp = s["reason_name"], s["clamp"]
-    if self.build_id not in V2_BUILDS:
+    protocol = protocol_of(self.build_id)
+    self.protocol = protocol or 2
+    if protocol is None:
       return "unknown_build"
     if self.stock_angle_ptm:
       if s["fault"]:
@@ -390,6 +392,8 @@ class EpsCalStatus:
   def byte3(self, cut: int) -> int:
     """0xE4 byte 3 for the protocol the EPS reported: v2 MODE 1 | AUTH (15 - CUT); v1 the requested mode, control bit,
     CUT. cut = 0 when the request is down."""
+    if self.protocol == 3:
+      return 0
     return byte3_v2(cut) if self.protocol == 2 else byte3_v1(self.requested, cut)
 
   def set_angle_profile(self, cap3: bool) -> None:
